@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-file(GLOB SOURCES "src/*.cpp")
+file(GLOB SOURCES CONFIGURE_DEPENDS "src/*.cpp")
 
 add_executable(${PROJECT_NAME} ${SOURCES})
 
