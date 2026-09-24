@@ -8,7 +8,7 @@ int main()
     try {
         std::vector<loompa::user> users;
         std::vector<loompa::group> groups;
-        std::unordered_set<std::string> priviledged_users;
+        std::unordered_set<std::string> privileged_users;
 
         utils::read_system_command("getent passwd", users);
         utils::read_system_command("getent group", groups);
@@ -16,7 +16,7 @@ int main()
         for(const auto& u : users)
         {
             if(u.uid == 0)
-                priviledged_users.insert(u.username);
+                privileged_users.insert(u.username);
         }
 
         for(const auto& g : groups)
@@ -24,12 +24,12 @@ int main()
             if(g.name == "sudo" || g.name == "wheel")
             {
                 for(const auto& member : g.members)
-                    priviledged_users.insert(member);
+                    privileged_users.insert(member);
             }
         }
 
         for(auto& u : users)
-            u.privileged = priviledged_users.contains(u.username);
+            u.privileged = privileged_users.contains(u.username);
 
         loompa::user::print_users(users);
         loompa::group::print_groups(groups);

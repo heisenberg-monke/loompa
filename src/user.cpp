@@ -9,7 +9,7 @@ namespace loompa
         "Shell",
         "UID",
         "GID",
-        "PRIVILEDGED"
+        "PRIVILEGED"
     };
 
     user::user(std::string_view view)
@@ -24,12 +24,12 @@ namespace loompa
     std::vector<std::string> user::to_row() const
     {
         return {
-            username,
-            home,
-            shell,
-            std::to_string(uid),
-            std::to_string(gid),
-            privileged ? "YES" : "NO"
+            this->username,
+            this->home,
+            this->shell,
+            std::to_string(this->uid),
+            std::to_string(this->gid),
+            this->privileged ? "YES" : "NO"
         };
     }
 
