@@ -4,52 +4,8 @@
 
 namespace loompa
 {
-    std::vector<utmpx> user_manager::read_login_records(const char* path) const
-    {
-        const std::string data = utils::file_system::read_entire_file(path);
-
-        if(data.size() % sizeof(utmpx) != 0)
-            throw loompa_exception(std::format("Login record file has an incomplete record: {}\n", path));
-
-        std::vector<utmpx> records(data.size() / sizeof(utmpx));
-
-        for(size_t i = 0; i < records.size(); ++i)
-            std::memcpy(&records[i], data.data() + i * sizeof(utmpx), sizeof(utmpx));
-
-        return records;
-    }
-
     std::string user_manager::field_string(const char* field, size_t size) const {
         return std::string(field, strnlen(field, size));
-    }
-
-    std::string user_manager::format_login_time(std::time_t timestamp) const
-    {
-        std::tm local_time{};
-
-        if(!localtime_r(&timestamp, &local_time))
-            return "Unknown";
-
-        std::ostringstream output;
-
-        output << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
-
-        return output.str();
-    }
-
-    size_t user_manager::parse_limit(std::string_view value) const
-    {
-        size_t limit{};
-        const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), limit);
-
-        if(error != std::errc{} || end != value.data() + value.size())
-            throw loompa_exception(std::format("Invalid limit: {}\n", value));
-
-        return limit;
-    }
-
-    bool user_manager::in_time_range(std::time_t timestamp, std::time_t since, std::time_t until) const {
-        return timestamp >= since && timestamp <= until;
     }
 
     const user* user_manager::find_user(const std::string_view& username) const
@@ -149,76 +105,6 @@ namespace loompa
         LOG_INFO(std::format("Displayed {} members of group {}.\n", rows.size(), group_name));
     }
 
-    void user_manager::show_history(const std::string_view &user, const std::string_view &since, const std::string_view &until, const std::string_view &limit)
-    {
-        std::time_t since_time = std::numeric_limits<std::time_t>::lowest();
-        std::time_t until_time = std::numeric_limits<std::time_t>::max();
-        size_t max_rows = std::numeric_limits<size_t>::max();
-
-        if(!since.empty())
-            since_time = utils::time::parse_time(since);
-
-        if(!until.empty())
-            until_time = utils::time::parse_time(until, true);
-
-        if(!limit.empty())
-            max_rows = parse_limit(limit);
-
-        const auto records = read_login_records("/var/log/wtmp");
-
-        static const std::vector<std::string> headers = {"Username", "Terminal", "Remote Host", "Login Time", "Logout Time"};
-        std::vector<std::vector<std::string>> rows;
-
-        for(size_t i = 0; i < records.size(); ++i)
-        {
-            const auto& login = records[i];
-
-            if(login.ut_type != USER_PROCESS || field_string(login.ut_user, sizeof(login.ut_user)) != user)
-                continue;
-
-            const std::time_t login_timestamp = login.ut_tv.tv_sec;
-
-            if(!in_time_range(login_timestamp, since_time, until_time))
-                continue;
-
-            const std::string terminal = field_string(login.ut_line, sizeof(login.ut_line));
-            std::string logout_time = "Still logged in";
-
-            for(size_t j = i + 1; j < records.size(); ++j)
-            {
-                const auto& logout = records[j];
-
-                if
-                (
-                    logout.ut_type == DEAD_PROCESS && logout.ut_pid == login.ut_pid && 
-                    field_string(logout.ut_line, sizeof(logout.ut_line)) == terminal
-                )
-                {
-                    logout_time = format_login_time(logout.ut_tv.tv_sec);
-                    break;
-                }
-            }
-
-            rows.push_back
-            ({
-                std::string(user),
-                terminal,
-                field_string(login.ut_host, sizeof(login.ut_host)),
-                format_login_time(login_timestamp),
-                logout_time
-            });
-        }
-
-        std::reverse(rows.begin(), rows.end());
-
-        if(rows.size() > max_rows)
-            rows.resize(max_rows);
-
-        utils::table::print_table(headers, rows);
-
-        LOG_INFO(std::format("Displayed {} history records for {}.\n", rows.size(), user));
-    }
-
     void user_manager::show_active_sesssions()
     {
         static const std::vector<std::string> headers = {"Username", "Terminal", "Remote Host", "Login Time"};
@@ -236,18 +122,7 @@ namespace loompa
             const std::string remote_host(entry->ut_host, strnlen(entry->ut_host, sizeof(entry->ut_host)));
 
             const std::time_t login_timestamp = entry->ut_tv.tv_sec;
-            std::tm login_time{};
-            std::string formatted_time = "Unknown";
-
-            if(localtime_r(&login_timestamp, &login_time))
-            {
-                std::ostringstream time_stream;
-
-                time_stream << std::put_time(&login_time, "%Y-%m-%d %H:%M:%S");
-                formatted_time = time_stream.str();
-            }
-
-            rows.push_back({username, terminal, remote_host, formatted_time});
+            rows.push_back({username, terminal, remote_host, utils::time::format_time(login_timestamp)});
         }
 
         endutxent();
@@ -255,57 +130,6 @@ namespace loompa
         utils::table::print_table(headers, rows);
         
         LOG_INFO(std::format("Displayed {} active sessions.\n", rows.size()));
-    }
-
-    void user_manager::show_failed_logins(const std::string_view &since, const std::string_view &until, const std::string_view &limit)
-    {
-        std::time_t since_time = std::numeric_limits<std::time_t>::lowest();
-        std::time_t until_time = std::numeric_limits<std::time_t>::max();
-        size_t max_rows = std::numeric_limits<size_t>::max();
-
-        if(!since.empty())
-            since_time = utils::time::parse_time(since);
-
-        if(!until.empty())
-            until_time = utils::time::parse_time(until, true);
-
-        if(!limit.empty())
-            max_rows = parse_limit(limit);
-
-        const auto records = read_login_records("/var/log/btmp");
-
-        static const std::vector<std::string> headers = {"Username", "Terminal", "Remote Host", "Time"};
-        std::vector<std::vector<std::string>> rows;
-
-        for(const auto& record : records)
-        {
-            const std::string username = field_string(record.ut_user, sizeof(record.ut_user));
-
-            if(username.empty())
-                continue;
-
-            const std::time_t timestamp = record.ut_tv.tv_sec;
-
-            if(!in_time_range(timestamp, since_time, until_time))
-                continue;
-
-            rows.push_back
-            ({
-                username,
-                field_string(record.ut_line, sizeof(record.ut_line)),
-                field_string(record.ut_host, sizeof(record.ut_host)),
-                format_login_time(timestamp)
-            });
-        }
-
-        std::reverse(rows.begin(), rows.end());
-
-        if(rows.size() > max_rows)
-            rows.resize(max_rows);
-
-        utils::table::print_table(headers, rows);
-
-        LOG_INFO(std::format("Displayed {} failed login records.\n", rows.size()));
     }
 
     user_manager::user_manager()
@@ -352,6 +176,7 @@ namespace loompa
 
         for(auto& [username, account] : users)
         {
+            usernames_by_uid.try_emplace(account.uid, username);
             for(const auto& [groupname, group_entry] : groups)
             {
                 const bool primary = group_entry.gid == account.gid;
@@ -368,8 +193,17 @@ namespace loompa
         LOG_INFO(std::format("Loaded {} users and {} groups.\n", users.size(), groups.size()));
     }
 
+    std::string user_manager::username_for_uid(uid_t uid) const
+    {
+        const auto it = usernames_by_uid.find(uid);
+        return it == usernames_by_uid.end() ? std::to_string(uid) : it->second;
+    }
+
     void user_manager::parse_user_options(int argc, char** argv)
     {
+        if(argc == 0)
+            throw loompa_exception("No subcommand given.\n");
+
         std::string_view arg = utils::string_view::shift_args(argc, argv);
         
         LOG_INFO(std::format("Running user subcommand: {}.\n", arg));
@@ -399,101 +233,6 @@ namespace loompa
 
         else if(arg == "sessions")
             show_active_sesssions();
-
-        else if(arg == "history")
-        {
-            if(argc == 0)
-            {
-                throw loompa_exception("No username provided for history.");
-            }
-
-            std::string_view username = utils::string_view::shift_args(argc, argv);
-
-            std::string_view since;
-            std::string_view until;
-            std::string_view limit;
-
-            while(argc > 0)
-            {
-                std::string_view option = utils::string_view::shift_args(argc, argv);
-
-                if(option == "--since")
-                {
-                    if(argc == 0)
-                    {
-                        throw loompa_exception("No argument provided for --since.");
-                    }
-
-                    since = utils::string_view::shift_args(argc, argv);
-                }
-
-                if(option == "--until")
-                {
-                    if(argc == 0)
-                    {
-                        throw loompa_exception("No argument provided for --until.");
-                    }
-
-                    until = utils::string_view::shift_args(argc, argv);
-                }
-
-                if(option == "--limit")
-                {
-                    if(argc == 0)
-                    {
-                        throw loompa_exception("No argument provided for --limit.");
-                    }
-
-                    limit = utils::string_view::shift_args(argc, argv);
-                }
-            }
-
-            show_history(username, since, until, limit);
-        }
-
-        else if(arg == "failed-logins")
-        {
-            std::string_view since;
-            std::string_view until;
-            std::string_view limit;
-
-            while(argc > 0)
-            {
-                std::string_view option = utils::string_view::shift_args(argc, argv);
-
-                if(option == "--since")
-                {
-                    if(argc == 0)
-                    {
-                        throw loompa_exception("No argument provided for --since.");
-                    }
-
-                    since = utils::string_view::shift_args(argc, argv);
-                }
-
-                if(option == "--until")
-                {
-                    if(argc == 0)
-                    {
-                        throw loompa_exception("No argument provided for --until.");
-                    }
-
-                    until = utils::string_view::shift_args(argc, argv);
-                }
-
-                if(option == "--limit")
-                {
-                    if(argc == 0)
-                    {
-                        throw loompa_exception("No argument provided for --limit.");
-                    }
-
-                    limit = utils::string_view::shift_args(argc, argv);
-                }
-            }
-
-            show_failed_logins(since, until, limit);
-        }
 
         else 
             throw loompa_exception(std::format("Unknown subcommand: {}\n", arg));

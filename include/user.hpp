@@ -24,12 +24,9 @@ namespace loompa
     {
         std::unordered_map<std::string, user> users;
         std::unordered_map<std::string, group> groups;
+        std::unordered_map<uid_t, std::string> usernames_by_uid;
 
-        std::vector<utmpx> read_login_records(const char* path) const;
         std::string field_string(const char* field, size_t size) const;
-        std::string format_login_time(std::time_t timestamp) const;
-        size_t parse_limit(std::string_view value) const;
-        bool in_time_range(std::time_t timestamp, std::time_t since, std::time_t until) const;
 
         const user* find_user(const std::string_view& username) const;
         const group* find_group(const std::string_view& group_name) const;
@@ -38,12 +35,11 @@ namespace loompa
         void show_user(const std::string_view& user);
         void show_groups(const std::string_view& group_name);
         void show_active_sesssions();
-        void show_history(const std::string_view& user, const std::string_view& since, const std::string_view& until, const std::string_view& limit);
-        void show_failed_logins(const std::string_view& since, const std::string_view& until, const std::string_view& limit);
 
     public:
 
         user_manager();
+        std::string username_for_uid(uid_t uid) const;
     
         void parse_user_options(int argc, char** argv);
     };

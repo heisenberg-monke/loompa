@@ -26,6 +26,16 @@ namespace utils
 {
     namespace time
     {
+        inline std::string format_time(std::time_t timestamp)
+        {
+            std::tm value{};
+            if(!localtime_r(&timestamp, &value))
+                return "Unknown";
+            std::ostringstream output;
+            output << std::put_time(&value, "%Y-%m-%d %H:%M:%S");
+            return output.str();
+        }
+
         inline std::time_t parse_time(std::string_view value, bool end_of_day = false)
         {
             std::string expression(value);
@@ -122,6 +132,15 @@ namespace utils
 
     namespace string_view
     {
+        inline size_t parse_limit(std::string_view value)
+        {
+            size_t limit{};
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), limit);
+            if(error != std::errc{} || end != value.data() + value.size())
+                throw std::runtime_error(std::format("Invalid limit: {}", value));
+            return limit;
+        }
+
         inline std::string_view chop_left(std::string_view& sv, size_t n = 1)
         {
             auto result = sv.substr(0, n);
@@ -282,6 +301,17 @@ namespace utils
             return buffer.str();
         }
 
+        inline std::vector<utmpx> read_login_records(const std::filesystem::path& path)
+        {
+            const std::string data = read_entire_file(path);
+            if(data.size() % sizeof(utmpx) != 0)
+                throw std::runtime_error(std::format("Login record file has an incomplete record: {}", path.string()));
+            std::vector<utmpx> records(data.size() / sizeof(utmpx));
+            for(size_t i = 0; i < records.size(); ++i)
+                std::memcpy(&records[i], data.data() + i * sizeof(utmpx), sizeof(utmpx));
+            return records;
+        }
+
         inline void write_entire_file(const std::filesystem::path& path, const std::string& content)
         {
             const auto path_str = path.string();
@@ -358,24 +388,25 @@ namespace utils
             for(auto& width : widths)
                 width += 2;
 
+            std::ostringstream rendered;
             auto border = [&]()
             {
-                std::cout << '+';
+                rendered << '+';
 
                 for(const auto& width : widths)
-                    std::cout << std::string(width, '-') << '+';
+                    rendered << std::string(width, '-') << '+';
 
-                std::cout << '\n';
+                rendered << '\n';
             };
 
             auto row = [&](const std::vector<std::string>& values)
             {
-                std::cout << '|';
+                rendered << '|';
 
                 for(size_t i = 0; i < columns; ++i)
-                    std::cout << ' ' << std::left << std::setw(widths[i] - 1) << values[i] << '|';
+                    rendered << ' ' << std::left << std::setw(widths[i] - 1) << values[i] << '|';
                 
-                std::cout << '\n';
+                rendered << '\n';
             };
 
             border();
@@ -386,6 +417,77 @@ namespace utils
                 row(values);
 
             border();
+
+            const std::string output = rendered.str();
+            size_t table_width = columns + 1;
+            for(const auto width : widths)
+                table_width += width;
+
+            winsize terminal{};
+            if(!isatty(STDOUT_FILENO) || ioctl(STDOUT_FILENO, TIOCGWINSZ, &terminal) == -1 ||
+                terminal.ws_col == 0 || table_width <= terminal.ws_col)
+            {
+                std::cout << output;
+                return;
+            }
+
+            FILE* buffer = std::tmpfile();
+            if(!buffer)
+            {
+                std::cout << output;
+                return;
+            }
+
+            std::fwrite(output.data(), 1, output.size(), buffer);
+            std::fflush(buffer);
+            std::rewind(buffer);
+
+            std::vector<std::string> pager_arguments;
+            if(const char* configured_pager = std::getenv("PAGER"); configured_pager && *configured_pager)
+            {
+                std::istringstream pager_words(configured_pager);
+                std::string word;
+                while(pager_words >> word)
+                    pager_arguments.push_back(std::move(word));
+            }
+            else
+                pager_arguments = {"less", "-S"};
+
+            if(pager_arguments.empty())
+            {
+                std::fclose(buffer);
+                std::cout << output;
+                return;
+            }
+
+            const pid_t child = fork();
+            if(child == 0)
+            {
+                if(dup2(fileno(buffer), STDIN_FILENO) == -1)
+                    _exit(127);
+                std::vector<char*> arguments;
+                arguments.reserve(pager_arguments.size() + 1);
+                for(auto& argument : pager_arguments)
+                    arguments.push_back(argument.data());
+                arguments.push_back(nullptr);
+                execvp(arguments.front(), arguments.data());
+                _exit(127);
+            }
+
+            std::fclose(buffer);
+            if(child == -1)
+            {
+                std::cout << output;
+                return;
+            }
+
+            int status{};
+            pid_t waited;
+            do
+                waited = waitpid(child, &status, 0);
+            while(waited == -1 && errno == EINTR);
+            if(waited == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+                std::cout << output;
         }
     }
 }

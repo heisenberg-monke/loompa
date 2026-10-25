@@ -2,6 +2,7 @@
 
 #include "user.hpp"
 #include "privileges.hpp"
+#include "activity.hpp"
 #include "utils.hpp"
 
 namespace loompa
@@ -12,8 +13,10 @@ namespace loompa
     {
         user_manager u_manager;
         privileges_manager p_manager;
+        activity_manager a_manager;
 
     public:
+        app();
         void print_usage() const;
         void print_version() const;
         

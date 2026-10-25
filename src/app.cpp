@@ -3,6 +3,8 @@
 
 namespace loompa 
 {
+    app::app() : a_manager(u_manager) {}
+
     void app::print_usage() const
     {
         LOG_OUT(
@@ -13,19 +15,20 @@ namespace loompa
             "  users show <username>              Show user details\n"
             "  users groups <group>               List members of a group\n"
             "  users sessions                     Show active sessions\n"
-            "  users history <username> [OPTIONS] Show login history\n"
-            "  users failed-logins [OPTIONS]      Show failed login attempts\n"
             "  privileges list                   List elevated accounts, groups, and capabilities\n"
             "  privileges check <username>       Evaluate configured privilege access\n"
             "  privileges sudo <username>        Show sudo policy and recorded activity\n"
             "  privileges changes [--since TIME] [--severity LEVEL]\n"
             "                                     Severity: LOW, MEDIUM, HIGH, CRITICAL\n"
             "                                     Show recorded privilege changes\n"
+            "  activity status                    Summarize activity and available sources\n"
+            "  activity logins [OPTIONS]          Show successful login events\n"
+            "  activity failed-logins [OPTIONS]   Show failed authentication events\n"
+            "  activity sudo [OPTIONS]            Show recorded sudo activity\n"
+            "  activity processes [OPTIONS]       List running processes\n"
             "\n"
-            "History and failed-login options:\n"
-            "  --since <DATE>                     Include entries since DATE\n"
-            "  --until <DATE>                     Include entries until DATE\n"
-            "  --limit <COUNT>                    Limit the number of entries\n"
+            "Activity filters (supported by relevant subcommands): --since DATE, --until DATE,\n"
+            "  --limit COUNT, --user USER\n"
             "\n"
             "DATE accepts GNU date expressions, such as '2026-10-25', 'yesterday',\n"
             "'24 hours ago', or compact durations such as '24h'.\n"
@@ -51,6 +54,9 @@ namespace loompa
 
         else if(arg == "privileges")
             p_manager.parse_options(argc, argv);
+
+        else if(arg == "activity")
+            a_manager.parse_options(argc, argv);
 
         else 
             throw loompa::loompa_exception(std::format("Unknown command: {}\n", arg));
