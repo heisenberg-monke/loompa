@@ -1,45 +1,38 @@
 #include "user.hpp"
-#include "group.hpp"
 
 #include "utils.hpp"
+#include <cassert>
+#include <iostream>
+#include <string_view>
 
-int main()
+#include "app.hpp"
+
+int main(int argc, char** argv)
 {
+    loompa::app app;
+
     try {
-        std::vector<loompa::user> users;
-        std::vector<loompa::group> groups;
-        std::unordered_set<std::string> privileged_users;
+        utils::string_view::shift_args(argc, argv);
 
-        utils::read_system_command("getent passwd", users);
-        utils::read_system_command("getent group", groups);
+        if(argc == 0)
+            throw loompa::loompa_exception("No command given.\n");
 
-        for(const auto& u : users)
-        {
-            if(u.uid == 0)
-                privileged_users.insert(u.username);
-        }
+        std::string_view arg = utils::string_view::shift_args(argc, argv);
 
-        for(const auto& g : groups)
-        {
-            if(g.name == "sudo" || g.name == "wheel")
-            {
-                for(const auto& member : g.members)
-                    privileged_users.insert(member);
-            }
-        }
+        if(arg[0] == '-')
+            app.parse_global_options(argc, argv, arg);
 
-        for(auto& u : users)
-            u.privileged = privileged_users.contains(u.username);
+        else
+            app.parse_commands(argc, argv, &arg);
 
-        loompa::user::print_users(users);
-        loompa::group::print_groups(groups);
+        return 0;
     }
 
-    catch(const std::exception& e)
+    catch(const loompa::loompa_exception& e)
     {
-        std::cerr << "[ERROR] " << e.what() << '\n';
+        utils::logger::log(std::cerr, "ERROR", nullptr, e.what());
+        app.print_usage();
+
         return 1;
     }
-    
-    return 0;
 }
