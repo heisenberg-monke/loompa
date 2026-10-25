@@ -9,9 +9,10 @@
 #include <sstream>
 #include <iostream>
 
-#include <set>
+#include <array>
 #include <string>
 #include <vector>
+#include <iterator>
 #include <string_view>
 #include <unordered_set>
 #include <unordered_map>
@@ -22,6 +23,7 @@
 #include <charconv>
 #include <optional>
 #include <algorithm>
+#include <filesystem>
 
 #include <grp.h>
 #include <pwd.h>

@@ -18,7 +18,7 @@ namespace loompa
             "  privileges list                   List elevated accounts, groups, and capabilities\n"
             "  privileges check <username>       Evaluate configured privilege access\n"
             "  privileges sudo <username>        Show sudo policy and recorded activity\n"
-            "  privileges changes --since TIME --severity LEVEL\n"
+            "  privileges changes [--since TIME] [--severity LEVEL]\n"
             "                                     Severity: LOW, MEDIUM, HIGH, CRITICAL\n"
             "                                     Show recorded privilege changes\n"
             "\n"

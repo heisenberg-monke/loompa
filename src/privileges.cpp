@@ -11,8 +11,11 @@ namespace loompa
 
     std::vector<std::string> privileges_manager::collect_privileges() const
     {
-        std::set<std::string> records;
-        std::set<std::string> administrative_groups = {"sudo", "wheel", "admin"};
+        std::vector<std::string> records;
+        constexpr std::array<std::string_view, 3> administrative_groups = {"sudo", "wheel", "admin"};
+        const auto is_administrative_group = [&](const std::string& name) {
+            return std::find(administrative_groups.begin(), administrative_groups.end(), name) != administrative_groups.end();
+        };
         std::vector<std::pair<std::string, gid_t>> groups;
 
         setgrent();
@@ -21,12 +24,12 @@ namespace loompa
             const std::string group_name = group_entry->gr_name ? group_entry->gr_name : "";
             groups.emplace_back(group_name, group_entry->gr_gid);
 
-            if(administrative_groups.contains(group_name))
+            if(is_administrative_group(group_name))
             {
                 if(group_entry->gr_mem)
                 {
                     for(char** member = group_entry->gr_mem; *member; ++member)
-                        records.insert(std::format("ADMIN_GROUP|{}|{}", group_name, *member));
+                        records.push_back(std::format("ADMIN_GROUP|{}|{}", group_name, *member));
                 }
             }
         }
@@ -38,8 +41,8 @@ namespace loompa
             const std::string username = account->pw_name ? account->pw_name : "";
             for(const auto& [group_name, gid] : groups)
             {
-                if(account->pw_gid == gid && administrative_groups.contains(group_name))
-                    records.insert(std::format("ADMIN_GROUP|{}|{}", group_name, username));
+                if(account->pw_gid == gid && is_administrative_group(group_name))
+                    records.push_back(std::format("ADMIN_GROUP|{}|{}", group_name, username));
             }
         }
         endpwent();
@@ -91,7 +94,7 @@ namespace loompa
                 line = line.substr(first, last - first + 1);
 
                 if(line.starts_with("Defaults") || line.find('=') != std::string::npos)
-                    records.insert(std::format("SUDO_POLICY|{}:{}|{}", path.string(), line_number, line));
+                    records.push_back(std::format("SUDO_POLICY|{}:{}|{}", path.string(), line_number, line));
             }
         }
 
@@ -108,12 +111,14 @@ namespace loompa
             const auto first = line.find_first_not_of(" \t");
 
             if(first != std::string::npos)
-                records.insert(std::format("CAPABILITY|{}", line.substr(first)));
+                records.push_back(std::format("CAPABILITY|{}", line.substr(first)));
         }
 
         LOG_INFO(std::format("Found {} file capability entries.\n", capability_lines.size()));
 
-        return {records.begin(), records.end()};
+        std::sort(records.begin(), records.end());
+        records.erase(std::unique(records.begin(), records.end()), records.end());
+        return records;
     }
 
     void privileges_manager::update_snapshot()
@@ -126,6 +131,14 @@ namespace loompa
 
         const auto current_records = collect_privileges();
 
+        privilege_records.clear();
+        for(const auto& record : current_records)
+        {
+            const auto separator = record.find('|');
+            privilege_records.emplace(record, separator == std::string::npos ? "" : record.substr(0, separator));
+        }
+
+        std::string line;
         if(!std::filesystem::exists(snapshot_path))
         {
             std::ofstream initial(snapshot_path, std::ios::trunc);
@@ -141,20 +154,32 @@ namespace loompa
             if(!initial_changes)
                 throw loompa_exception("Failed to initialize privilege change database.\n");
 
+            change_history.clear();
+            std::istringstream history_input(utils::file_system::read_entire_file(changes_path));
+            while(std::getline(history_input, line))
+                if(!line.empty())
+                    change_history.push_back(line);
+
             return;
         }
 
         std::istringstream previous_stream(utils::file_system::read_entire_file(snapshot_path));
-        std::set<std::string> previous_records;
-        std::string line;
+        std::vector<std::string> previous_records;
 
         while(std::getline(previous_stream, line))
         {
             if(!line.empty())
-                previous_records.insert(line);
+                previous_records.push_back(line);
         }
-            
-        const std::set<std::string> current_set(current_records.begin(), current_records.end());
+
+        std::sort(previous_records.begin(), previous_records.end());
+        previous_records.erase(std::unique(previous_records.begin(), previous_records.end()), previous_records.end());
+
+        std::vector<std::string> added_records;
+        std::vector<std::string> removed_records;
+        std::set_difference(current_records.begin(), current_records.end(), previous_records.begin(), previous_records.end(), std::back_inserter(added_records));
+        std::set_difference(previous_records.begin(), previous_records.end(), current_records.begin(), current_records.end(), std::back_inserter(removed_records));
+
         std::ofstream changes_output(changes_path, std::ios::app);
 
         if(!changes_output)
@@ -162,17 +187,11 @@ namespace loompa
 
         const auto timestamp = static_cast<long long>(std::time(nullptr));
 
-        for(const auto& record : current_set)
-        {
-            if(!previous_records.contains(record))
-                changes_output << timestamp << "\tHIGH\tADDED\t" << record << '\n';
-        }
+        for(const auto& record : added_records)
+            changes_output << timestamp << "\tHIGH\tADDED\t" << record << '\n';
 
-        for(const auto& record : previous_records)
-        {
-            if(!current_set.contains(record))
-                changes_output << timestamp << "\tMEDIUM\tREMOVED\t" << record << '\n';
-        }
+        for(const auto& record : removed_records)
+            changes_output << timestamp << "\tMEDIUM\tREMOVED\t" << record << '\n';
 
         changes_output.close();
 
@@ -186,27 +205,36 @@ namespace loompa
 
         if(!snapshot_output)
             throw loompa_exception("Failed to update privilege snapshot.\n");
+
+        change_history.clear();
+        if(std::filesystem::exists(changes_path))
+        {
+            std::istringstream history_input(utils::file_system::read_entire_file(changes_path));
+            while(std::getline(history_input, line))
+                if(!line.empty())
+                    change_history.push_back(line);
+        }
     }
 
     void privileges_manager::list() const
     {
-        std::istringstream input(utils::file_system::read_entire_file(snapshot_path));
         std::vector<std::vector<std::string>> rows;
-        std::string line;
+        rows.reserve(privilege_records.size());
 
-        while(std::getline(input, line))
+        for(const auto& [record, category] : privilege_records)
         {
-            const auto first = line.find('|');
+            const auto first = record.find('|');
 
             if(first == std::string::npos)
                 continue;
 
-            const auto second = line.find('|', first + 1);
+            const auto second = record.find('|', first + 1);
 
-            rows.push_back({line.substr(0, first), line.substr(first + 1, second == std::string::npos ? second : second - first - 1),
-                second == std::string::npos ? "" : line.substr(second + 1)});
+            rows.push_back({category, record.substr(first + 1, second == std::string::npos ? second : second - first - 1),
+                second == std::string::npos ? "" : record.substr(second + 1)});
         }
 
+        std::sort(rows.begin(), rows.end());
         static const std::vector<std::string> headers = {"Privilege Type", "Account / Source", "Details"};
 
         utils::table::print_table(headers, rows);
@@ -220,7 +248,7 @@ namespace loompa
         if(!account)
             throw loompa_exception(std::format("Unknown user: {}\n", username));
 
-        std::set<std::string> user_groups;
+        std::vector<std::string> user_groups;
 
         setgrent();
 
@@ -235,26 +263,27 @@ namespace loompa
             }
 
             if(member)
-                user_groups.insert(group_entry->gr_name ? group_entry->gr_name : "");
+                user_groups.emplace_back(group_entry->gr_name ? group_entry->gr_name : "");
         }
 
         endgrent();
 
-        std::istringstream snapshot(utils::file_system::read_entire_file(snapshot_path));
-        std::unordered_map<std::string, std::vector<std::string>> user_aliases;
-        std::string line;
+        std::sort(user_groups.begin(), user_groups.end());
+        user_groups.erase(std::unique(user_groups.begin(), user_groups.end()), user_groups.end());
 
-        while(std::getline(snapshot, line))
+        std::unordered_map<std::string, std::vector<std::string>> user_aliases;
+
+        for(const auto& [record, category] : privilege_records)
         {
-            if(!line.starts_with("SUDO_POLICY|"))
+            if(category != "SUDO_POLICY")
                 continue;
 
-            const auto second = line.find('|', line.find('|') + 1);
+            const auto second = record.find('|', record.find('|') + 1);
 
             if(second == std::string::npos)
                 continue;
 
-            const std::string rule = line.substr(second + 1);
+            const std::string rule = record.substr(second + 1);
 
             if(!rule.starts_with("User_Alias "))
                 continue;
@@ -284,18 +313,20 @@ namespace loompa
             }
         }
 
-        const auto matches_subject = [&](auto&& self, const std::string& subject, std::set<std::string>& visited) -> bool 
+        const auto matches_subject = [&](auto&& self, const std::string& subject, std::vector<std::string>& visited) -> bool
         {
             if(subject == username || subject == "ALL")
                 return true;
 
-            if(subject.starts_with('%') && user_groups.contains(subject.substr(1)))
+            if(subject.starts_with('%') && std::find(user_groups.begin(), user_groups.end(), subject.substr(1)) != user_groups.end())
                 return true;
 
             const auto alias = user_aliases.find(subject);
 
-            if(alias == user_aliases.end() || !visited.insert(subject).second)
+            if(alias == user_aliases.end() || std::find(visited.begin(), visited.end(), subject) != visited.end())
                 return false;
+
+            visited.push_back(subject);
 
             for(const auto& member : alias->second)
             {
@@ -306,30 +337,27 @@ namespace loompa
             return false;
         };
 
-        snapshot.clear();
-        snapshot.seekg(0);
-
         std::vector<std::string> matches;
 
-        while(std::getline(snapshot, line))
+        for(const auto& [record, category] : privilege_records)
         {
-            if(line.starts_with("ADMIN_GROUP|"))
+            if(category == "ADMIN_GROUP")
             {
-                const auto last = line.rfind('|');
+                const auto last = record.rfind('|');
 
-                if(last != std::string::npos && line.substr(last + 1) == username)
-                    matches.push_back(line);
+                if(last != std::string::npos && record.substr(last + 1) == username)
+                    matches.push_back(record);
             }
 
-            else if(line.starts_with("SUDO_POLICY|"))
+            else if(category == "SUDO_POLICY")
             {
-                const auto first = line.find('|');
-                const auto second = line.find('|', first + 1);
+                const auto first = record.find('|');
+                const auto second = record.find('|', first + 1);
 
                 if(second == std::string::npos)
                     continue;
 
-                const std::string rule = line.substr(second + 1);
+                const std::string rule = record.substr(second + 1);
                 const auto equals = rule.find('=');
                 const std::string subjects = rule.substr(0, equals);
 
@@ -346,31 +374,45 @@ namespace loompa
 
                     subject = subject.substr(begin, end - begin + 1);
 
-                    std::set<std::string> visited;
+                    std::vector<std::string> visited;
 
                     if(matches_subject(matches_subject, subject, visited))
                     {
-                        matches.push_back(line);
+                        matches.push_back(record);
                         break;
                     }
                 }
             }
         }
 
-        static const std::vector<std::string> headers = {"Configured Access"};
+        static const std::vector<std::string> headers = {"Access path", "Source", "Configured entry"};
         std::vector<std::vector<std::string>> rows;
 
-        for(const auto& group : user_groups)
-        {
-            if(group == "sudo" || group == "wheel" || group == "admin")
-                rows.push_back({std::format("Member of administrative group {}", group)});
-        }
-            
+        if(account->pw_uid == 0)
+            rows.push_back({"Root account", "UID 0", "Has root privileges when logged in as this account"});
+
         for(const auto& match : matches)
-            rows.push_back({match});
+        {
+            const auto first = match.find('|');
+            const auto second = first == std::string::npos ? std::string::npos : match.find('|', first + 1);
+
+            if(first == std::string::npos || second == std::string::npos)
+                continue;
+
+            const std::string category = match.substr(0, first);
+            const std::string source = match.substr(first + 1, second - first - 1);
+            const std::string detail = match.substr(second + 1);
+
+            if(category == "ADMIN_GROUP")
+                rows.push_back({"Administrative group", source, "User is a member of this group"});
+            else if(category == "SUDO_POLICY")
+                rows.push_back({"Sudoers rule", source, detail});
+        }
+
+        std::sort(rows.begin(), rows.end());
 
         if(rows.empty())
-            rows.push_back({"No configured sudo or administrative-group access detected"});
+            rows.push_back({"No matching access", "Checked groups and sudoers", "No configured match was detected"});
 
         utils::table::print_table(headers, rows);
 
@@ -411,27 +453,24 @@ namespace loompa
     void privileges_manager::changes(std::string_view since, std::string_view severity) const
     {
         size_t severity_level = 0;
-        std::string normalized_severity(severity);
-        std::transform(normalized_severity.begin(), normalized_severity.end(), normalized_severity.begin(), [](unsigned char c) { return std::toupper(c); });
+        if(!severity.empty())
+        {
+            std::string normalized_severity(severity);
+            std::transform(normalized_severity.begin(), normalized_severity.end(), normalized_severity.begin(), [](unsigned char c) { return std::toupper(c); });
 
-        if(normalized_severity == "LOW") severity_level = 1;
-        else if(normalized_severity == "MEDIUM") severity_level = 2;
-        else if(normalized_severity == "HIGH") severity_level = 3;
-        else if(normalized_severity == "CRITICAL") severity_level = 4;
-        else throw loompa_exception(std::format("Unknown severity level: {}. Use LOW, MEDIUM, HIGH, or CRITICAL.\n", severity));
+            if(normalized_severity == "LOW") severity_level = 1;
+            else if(normalized_severity == "MEDIUM") severity_level = 2;
+            else if(normalized_severity == "HIGH") severity_level = 3;
+            else if(normalized_severity == "CRITICAL") severity_level = 4;
+            else throw loompa_exception(std::format("Unknown severity level: {}. Use LOW, MEDIUM, HIGH, or CRITICAL.\n", severity));
+        }
 
         std::string since_value(since);
+        const std::time_t since_timestamp = since_value.empty() ? std::numeric_limits<std::time_t>::lowest() : utils::time::parse_time(since_value);
 
-        if(since_value.empty())
-            throw loompa_exception("privileges changes requires --since TIME.\n");
-
-        const std::time_t since_timestamp = utils::time::parse_time(since_value);
-
-        std::istringstream input(utils::file_system::read_entire_file(changes_path));
         std::vector<std::vector<std::string>> rows;
-        std::string line;
 
-        while(std::getline(input, line))
+        for(const auto& line : change_history)
         {
             std::istringstream fields(line);
             std::string timestamp_string, row_severity, action, record;
@@ -509,8 +548,6 @@ namespace loompa
                     throw loompa_exception(std::format("Unknown privileges changes option: {}\n", option));
             }
 
-            if(severity.empty())
-                throw loompa_exception("privileges changes requires --severity LEVEL.\n");
             changes(since, severity);
         }
         

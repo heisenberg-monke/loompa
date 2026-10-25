@@ -1,11 +1,5 @@
 #pragma once
 
-#include <filesystem>
-#include <ctime>
-#include <string>
-#include <string_view>
-#include <vector>
-
 namespace loompa
 {
     class privileges_manager
@@ -13,6 +7,8 @@ namespace loompa
         std::filesystem::path data_dir;
         std::filesystem::path snapshot_path;
         std::filesystem::path changes_path;
+        std::unordered_map<std::string, std::string> privilege_records;
+        std::vector<std::string> change_history;
 
         std::vector<std::string> collect_privileges() const;
         void update_snapshot();
