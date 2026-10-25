@@ -5,12 +5,35 @@ namespace loompa
 {
     void app::print_usage() const
     {
-
+        LOG_OUT(
+            "Usage: loompa [GLOBAL OPTION]... <COMMAND> [ARGS]\n"
+            "\n"
+            "Commands:\n"
+            "  users list                         List users\n"
+            "  users show <username>              Show user details\n"
+            "  users groups <group>               List members of a group\n"
+            "  users sessions                     Show active sessions\n"
+            "  users history <username> [OPTIONS] Show login history\n"
+            "  users failed-logins [OPTIONS]      Show failed login attempts\n"
+            "\n"
+            "History and failed-login options:\n"
+            "  --since <DATE>                     Include entries since DATE\n"
+            "  --until <DATE>                     Include entries until DATE\n"
+            "  --limit <COUNT>                    Limit the number of entries\n"
+            "\n"
+            "DATE accepts GNU date expressions, such as '2026-10-25', 'yesterday',\n"
+            "'24 hours ago', or compact durations such as '24h'.\n"
+            "\n"
+            "Global options:\n"
+            "  -h, --help                         Show this help\n"
+            "  -V, --version                      Show version\n"
+            "  -v, --verbose                      Enable informational logging\n"
+            "  -q, --quiet                        Disable informational logging\n");
     }
 
     void app::print_version() const
     {
-
+        LOG_OUT("loompa 0.1.0\n");
     }
 
     void app::parse_commands(int argc, char** argv, const std::string_view* prev)
