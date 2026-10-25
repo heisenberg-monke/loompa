@@ -28,7 +28,6 @@ namespace loompa
         std::vector<utmpx> read_login_records(const char* path) const;
         std::string field_string(const char* field, size_t size) const;
         std::string format_login_time(std::time_t timestamp) const;
-        std::time_t parse_time_filter(std::string_view value, bool end_of_day) const;
         size_t parse_limit(std::string_view value) const;
         bool in_time_range(std::time_t timestamp, std::time_t since, std::time_t until) const;
 

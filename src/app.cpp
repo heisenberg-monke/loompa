@@ -15,6 +15,12 @@ namespace loompa
             "  users sessions                     Show active sessions\n"
             "  users history <username> [OPTIONS] Show login history\n"
             "  users failed-logins [OPTIONS]      Show failed login attempts\n"
+            "  privileges list                   List elevated accounts, groups, and capabilities\n"
+            "  privileges check <username>       Evaluate configured privilege access\n"
+            "  privileges sudo <username>        Show sudo policy and recorded activity\n"
+            "  privileges changes --since TIME --severity LEVEL\n"
+            "                                     Severity: LOW, MEDIUM, HIGH, CRITICAL\n"
+            "                                     Show recorded privilege changes\n"
             "\n"
             "History and failed-login options:\n"
             "  --since <DATE>                     Include entries since DATE\n"
@@ -42,6 +48,9 @@ namespace loompa
 
         if(arg == "users")
             u_manager.parse_user_options(argc, argv);
+
+        else if(arg == "privileges")
+            p_manager.parse_options(argc, argv);
 
         else 
             throw loompa::loompa_exception(std::format("Unknown command: {}\n", arg));

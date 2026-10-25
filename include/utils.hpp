@@ -1,10 +1,16 @@
 #pragma once
 
 #include <cassert>
+#include <cerrno>
+#include <charconv>
+#include <cctype>
+#include <ctime>
+#include <cstring>
 
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <stdexcept>
 
 #include <string>
 #include <string_view>
@@ -12,9 +18,108 @@
 #include <format>
 #include <filesystem>
 #include <source_location>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace utils
 {
+    namespace time
+    {
+        inline std::time_t parse_time(std::string_view value, bool end_of_day = false)
+        {
+            std::string expression(value);
+
+            if(expression.size() > 1 && std::isdigit(static_cast<unsigned char>(expression[expression.size() - 2])))
+            {
+                const char unit = expression.back();
+                const std::string_view amount(expression.data(), expression.size() - 1);
+                std::string unit_name;
+
+                switch(unit)
+                {
+                    case 's': unit_name = "second"; break;
+                    case 'm': unit_name = "minute"; break;
+                    case 'h': unit_name = "hour"; break;
+                    case 'd': unit_name = "day"; break;
+                    case 'w': unit_name = "week"; break;
+                    default: break;
+                }
+
+                size_t amount_value{};
+                const auto [amount_end, amount_error] = std::from_chars(amount.data(), amount.data() + amount.size(), amount_value);
+                if(!unit_name.empty() && amount_error == std::errc{} && amount_end == amount.data() + amount.size())
+                    expression = std::format("{} {}{} ago", amount_value, unit_name, amount_value == 1 ? "" : "s");
+            }
+
+            bool date_only = expression.size() == 10 && expression[4] == '-' && expression[7] == '-';
+            for(size_t i = 0; date_only && i < expression.size(); ++i)
+                if(i != 4 && i != 7 && !std::isdigit(static_cast<unsigned char>(expression[i])))
+                    date_only = false;
+            if(end_of_day && date_only)
+                expression += " 23:59:59";
+
+            int output_pipe[2];
+            if(pipe(output_pipe) == -1)
+                throw std::runtime_error(std::format("Failed to create time parser pipe: {}", std::strerror(errno)));
+
+            const pid_t child = fork();
+            if(child == -1)
+            {
+                close(output_pipe[0]);
+                close(output_pipe[1]);
+                throw std::runtime_error(std::format("Failed to start time parser: {}", std::strerror(errno)));
+            }
+
+            if(child == 0)
+            {
+                close(output_pipe[0]);
+                if(dup2(output_pipe[1], STDOUT_FILENO) == -1)
+                    _exit(127);
+                close(output_pipe[1]);
+                const int null_device = open("/dev/null", O_WRONLY);
+                if(null_device != -1)
+                {
+                    dup2(null_device, STDERR_FILENO);
+                    close(null_device);
+                }
+                const std::string date_argument = "--date=" + expression;
+                execlp("date", "date", date_argument.c_str(), "+%s", static_cast<char*>(nullptr));
+                _exit(127);
+            }
+
+            close(output_pipe[1]);
+            char output[64]{};
+            size_t output_size = 0;
+            while(output_size < sizeof(output) - 1)
+            {
+                const ssize_t count = read(output_pipe[0], output + output_size, sizeof(output) - 1 - output_size);
+                if(count > 0)
+                    output_size += static_cast<size_t>(count);
+                else if(count == -1 && errno == EINTR)
+                    continue;
+                else
+                    break;
+            }
+            close(output_pipe[0]);
+
+            int status{};
+            while(waitpid(child, &status, 0) == -1)
+                if(errno != EINTR)
+                    throw std::runtime_error(std::format("Failed waiting for time parser: {}", std::strerror(errno)));
+
+            if(output_size > 0 && output[output_size - 1] == '\n')
+                --output_size;
+
+            std::time_t timestamp{};
+            const auto [end, error] = std::from_chars(output, output + output_size, timestamp);
+            if(!WIFEXITED(status) || WEXITSTATUS(status) != 0 || error != std::errc{} || end != output + output_size)
+                throw std::runtime_error(std::format("Invalid time: {}", value));
+
+            return timestamp;
+        }
+    }
+
     namespace string_view
     {
         inline std::string_view chop_left(std::string_view& sv, size_t n = 1)

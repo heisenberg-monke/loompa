@@ -1,5 +1,3 @@
-#include "user.hpp"
-
 #include "utils.hpp"
 #include <cassert>
 #include <iostream>
@@ -29,6 +27,14 @@ int main(int argc, char** argv)
     }
 
     catch(const loompa::loompa_exception& e)
+    {
+        utils::logger::log(std::cerr, "ERROR", nullptr, e.what());
+        app.print_usage();
+
+        return 1;
+    }
+
+    catch(const std::runtime_error& e)
     {
         utils::logger::log(std::cerr, "ERROR", nullptr, e.what());
         app.print_usage();

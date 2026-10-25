@@ -37,126 +37,6 @@ namespace loompa
         return output.str();
     }
 
-    std::time_t user_manager::parse_time_filter(std::string_view value, bool end_of_day) const
-    {
-        std::string expression(value);
-
-        if(expression.size() > 1 && std::isdigit(static_cast<unsigned char>(expression[expression.size() - 2])))
-        {
-            const char unit = expression.back();
-
-            const std::string_view amount(expression.data(), expression.size() - 1);
-            std::string unit_name;
-
-            switch(unit)
-            {
-                case 's': unit_name = "second"; break;
-                case 'm': unit_name = "minute"; break;
-                case 'h': unit_name = "hour"; break;
-                case 'd': unit_name = "day"; break;
-                case 'w': unit_name = "week"; break;
-                default: break;
-            }
-
-            size_t amount_value{};
-            const auto [amount_end, amount_error] = std::from_chars(amount.data(), amount.data() + amount.size(), amount_value);
-
-            if(!unit_name.empty() && amount_error == std::errc{} && amount_end == amount.data() + amount.size())
-                expression = std::format("{} {}{} ago", amount_value, unit_name, amount_value == 1 ? "" : "s");
-        }
-
-        bool date_only = expression.size() == 10 && expression[4] == '-' && expression[7] == '-';
-
-        for(size_t i = 0; date_only && i < expression.size(); ++i)
-        {
-            if(i != 4 && i != 7 && !std::isdigit(static_cast<unsigned char>(expression[i])))
-                date_only = false;
-        }
-
-        if(end_of_day && date_only)
-            expression += " 23:59:59";
-
-        int output_pipe[2];
-
-        if(pipe(output_pipe) == -1)
-            throw loompa_exception(std::format("Failed to create date parser pipe: {}\n", std::strerror(errno)));
-
-        const pid_t child = fork();
-
-        if(child == -1)
-        {
-            close(output_pipe[0]);
-            close(output_pipe[1]);
-
-            throw loompa_exception(std::format("Failed to start date parser: {}\n", std::strerror(errno)));
-        }
-
-        if(child == 0)
-        {
-            close(output_pipe[0]);
-
-            if(dup2(output_pipe[1], STDOUT_FILENO) == -1)
-                _exit(127);
-
-            close(output_pipe[1]);
-
-            const int null_device = open("/dev/null", O_WRONLY);
-
-            if(null_device != -1)
-            {
-                dup2(null_device, STDERR_FILENO);
-                close(null_device);
-            }
-
-            const std::string date_argument = "--date=" + expression;
-
-            execlp("date", "date", date_argument.c_str(), "+%s", static_cast<char*>(nullptr));
-            _exit(127);
-        }
-
-        close(output_pipe[1]);
-
-        char output[64]{};
-        size_t output_size = 0;
-
-        while(output_size < sizeof(output) - 1)
-        {
-            const ssize_t count = read(output_pipe[0], output + output_size, sizeof(output) - 1 - output_size);
-
-            if(count > 0)
-                output_size += static_cast<size_t>(count);
-
-            else if(count == -1 && errno == EINTR)
-                continue;
-
-            else
-                break;
-        }
-
-        close(output_pipe[0]);
-
-        int status{};
-
-        while(waitpid(child, &status, 0) == -1)
-        {
-            if(errno != EINTR)
-                throw loompa_exception(std::format("Failed to wait for date parser: {}\n", std::strerror(errno)));
-        }
-
-        size_t output_length = output_size;
-
-        if(output_length > 0 && output[output_length - 1] == '\n')
-            --output_length;
-
-        std::time_t timestamp{};
-        const auto [parsed_end, parse_error] = std::from_chars(output, output + output_length, timestamp);
-        
-        if(!WIFEXITED(status) || WEXITSTATUS(status) != 0 || parse_error != std::errc{} || parsed_end != output + output_length)
-            throw loompa_exception(std::format("Invalid date/time: {}\n", value));
-
-        return timestamp;
-    }
-
     size_t user_manager::parse_limit(std::string_view value) const
     {
         size_t limit{};
@@ -276,10 +156,10 @@ namespace loompa
         size_t max_rows = std::numeric_limits<size_t>::max();
 
         if(!since.empty())
-            since_time = parse_time_filter(since, false);
+            since_time = utils::time::parse_time(since);
 
         if(!until.empty())
-            until_time = parse_time_filter(until, true);
+            until_time = utils::time::parse_time(until, true);
 
         if(!limit.empty())
             max_rows = parse_limit(limit);
@@ -384,10 +264,10 @@ namespace loompa
         size_t max_rows = std::numeric_limits<size_t>::max();
 
         if(!since.empty())
-            since_time = parse_time_filter(since, false);
+            since_time = utils::time::parse_time(since);
 
         if(!until.empty())
-            until_time = parse_time_filter(until, true);
+            until_time = utils::time::parse_time(until, true);
 
         if(!limit.empty())
             max_rows = parse_limit(limit);

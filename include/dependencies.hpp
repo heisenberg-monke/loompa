@@ -5,9 +5,11 @@
 #include <cerrno>
 #include <cstring>
 
+#include <fstream>
 #include <sstream>
 #include <iostream>
 
+#include <set>
 #include <string>
 #include <vector>
 #include <string_view>

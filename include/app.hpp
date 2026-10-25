@@ -1,6 +1,7 @@
 #pragma once
 
 #include "user.hpp"
+#include "privileges.hpp"
 #include "utils.hpp"
 
 namespace loompa
@@ -10,6 +11,7 @@ namespace loompa
     class app 
     {
         user_manager u_manager;
+        privileges_manager p_manager;
 
     public:
         void print_usage() const;
