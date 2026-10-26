@@ -353,13 +353,22 @@ namespace utils
             if(!pipe)
                 throw std::runtime_error(std::format("Failed to execute command: {}: {}", cmd, strerror(errno)));
 
-            char buf[256];
+            char buf[4096];
+            std::string line;
 
             while(fgets(buf, sizeof(buf), pipe))
             {
-                buf[strcspn(buf, "\n")] = '\0';
-                data.emplace_back(buf);
+                line += buf;
+                if(!line.empty() && line.back() == '\n')
+                {
+                    line.pop_back();
+                    data.emplace_back(std::move(line));
+                    line.clear();
+                }
             }
+
+            if(!line.empty())
+                data.emplace_back(std::move(line));
                 
 
             pclose(pipe);

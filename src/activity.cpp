@@ -176,6 +176,65 @@ namespace loompa
         return left.timestamp > right.timestamp;
     }
 
+    bool sudo_activity::matches(std::time_t since, std::time_t until, std::string_view user) const
+    {
+        return timestamp >= since && timestamp <= until && (user.empty() || username == user);
+    }
+
+    bool sudo_activity::merge_duplicate(const sudo_activity& other)
+    {
+        if(timestamp != other.timestamp || username != other.username || target_user != other.target_user || command != other.command)
+            return false;
+        if(source.find(other.source) == std::string::npos)
+            source += ", " + other.source;
+        return true;
+    }
+
+    bool sudo_activity::parse(std::string_view message, std::time_t time, std::string_view source, sudo_activity& result)
+    {
+        const auto command_marker = message.find("COMMAND=");
+        if(command_marker == std::string_view::npos)
+            return false;
+        auto prefix_end = message.find(" :", 0);
+        if(prefix_end == std::string_view::npos || prefix_end > command_marker)
+            return false;
+
+        auto username_start = message.find("sudo:");
+        username_start = username_start == std::string_view::npos ? 0 : username_start + 5;
+        auto username_end = prefix_end;
+        while(username_start < username_end && std::isspace(static_cast<unsigned char>(message[username_start]))) ++username_start;
+        while(username_end > username_start && std::isspace(static_cast<unsigned char>(message[username_end - 1]))) --username_end;
+        if(username_start == username_end)
+            return false;
+
+        const auto target_marker = message.find("USER=");
+        std::string target = "root";
+        if(target_marker != std::string_view::npos)
+        {
+            const auto begin = target_marker + 5;
+            const auto end = message.find_first_of(" ;,]", begin);
+            if(begin < message.size())
+                target = std::string(message.substr(begin, end == std::string_view::npos ? end : end - begin));
+        }
+
+        const auto command_start = command_marker + 8;
+        auto command_end = message.find_first_of("\r\n", command_start);
+        if(command_end == std::string_view::npos)
+            command_end = message.size();
+        while(command_end > command_start && std::isspace(static_cast<unsigned char>(message[command_end - 1]))) --command_end;
+        if(command_start == command_end)
+            return false;
+
+        result = {time, std::string(message.substr(username_start, username_end - username_start)), target,
+            std::string(message.substr(command_start, command_end - command_start)), std::string(source)};
+        return true;
+    }
+
+    bool sudo_activity::newest_first(const sudo_activity& left, const sudo_activity& right)
+    {
+        return left.timestamp > right.timestamp;
+    }
+
     activity_manager::activity_manager(const user_manager& user_data) : users(user_data) {}
 
     std::pair<std::time_t, std::time_t> activity_manager::parse_time_range(std::string_view since, std::string_view until) const
@@ -192,6 +251,17 @@ namespace loompa
     }
 
     void activity_manager::add_failure(std::vector<login_failure>& events, login_failure event,
+        std::time_t since, std::time_t until, std::string_view user) const
+    {
+        if(!event.matches(since, until, user))
+            return;
+        for(auto& existing : events)
+            if(existing.merge_duplicate(event))
+                return;
+        events.push_back(std::move(event));
+    }
+
+    void activity_manager::add_sudo_activity(std::vector<sudo_activity>& events, sudo_activity event,
         std::time_t since, std::time_t until, std::string_view user) const
     {
         if(!event.matches(since, until, user))
@@ -341,57 +411,66 @@ namespace loompa
 
     void activity_manager::sudo(std::string_view since, std::string_view until, std::string_view limit, std::string_view user) const
     {
+        if(geteuid() != 0)
+            throw loompa_exception("activity sudo requires root privileges to read system authentication logs; run it with sudo.\n");
+
         const auto [start, finish] = parse_time_range(since, until);
         const auto maximum = parse_row_limit(limit);
-        static const std::vector<std::string> headers = {"Time", "Invoking user", "Command / log entry", "Source"};
-        std::vector<std::vector<std::string>> rows;
-        for(const std::filesystem::path path : {"/var/log/auth.log", "/var/log/secure"})
+        std::vector<sudo_activity> events;
+        for(const std::filesystem::path path : {"/var/log/auth.log", "/var/log/auth.log.1", "/var/log/secure", "/var/log/secure.1"})
         {
             std::ifstream input(path);
             std::string line;
             while(std::getline(input, line))
             {
-                const auto sudo_pos = line.find("sudo:");
-                if(sudo_pos == std::string::npos)
+                const auto sudo_marker = line.find("sudo");
+                if(sudo_marker == std::string::npos)
                     continue;
-                std::string invoking_user;
-                const auto user_start = sudo_pos + 5;
-                const auto user_end = line.find(' ', user_start);
-                if(user_end != std::string::npos && user_end > user_start)
-                    invoking_user = line.substr(user_start, user_end - user_start);
-                if(!user.empty() && invoking_user != user)
+                const auto message_marker = line.find(": ", sudo_marker);
+                if(message_marker == std::string::npos)
                     continue;
-
-                std::time_t timestamp{};
-                std::tm parsed{};
-                std::istringstream date(line.substr(0, std::min<size_t>(15, line.size())));
-                date >> std::get_time(&parsed, "%b %d %H:%M:%S");
-                if(!date.fail())
-                {
-                    const auto now = std::time(nullptr);
-                    std::tm current{};
-                    localtime_r(&now, &current);
-                    parsed.tm_year = current.tm_year;
-                    timestamp = std::mktime(&parsed);
-                    if(timestamp > now + 86400)
-                    {
-                        parsed.tm_year -= 1;
-                        timestamp = std::mktime(&parsed);
-                    }
-                }
-                else
-                    timestamp = std::time(nullptr);
-                if(timestamp < start || timestamp > finish)
+                const std::string_view message(line.data() + message_marker + 2, line.size() - message_marker - 2);
+                const auto timestamp = login_failure::parse_syslog_time(line);
+                if(timestamp == 0)
                     continue;
-
-                std::string details = line.substr(sudo_pos + 5);
-                const auto command_pos = details.find("COMMAND=");
-                if(command_pos != std::string::npos)
-                    details = details.substr(command_pos + 8);
-                rows.push_back({utils::time::format_time(timestamp), invoking_user.empty() ? "Unknown" : invoking_user, details, path.string()});
+                sudo_activity event;
+                if(sudo_activity::parse(message, timestamp, path.string(), event))
+                    add_sudo_activity(events, std::move(event), start, finish, user);
             }
         }
-        std::reverse(rows.begin(), rows.end());
+
+        std::string journal_command = "journalctl --no-pager --output=json --identifier=sudo --identifier=sudo_logsrvd";
+        if(!since.empty())
+            journal_command += std::format(" --since=@{}", static_cast<long long>(start));
+        if(!until.empty())
+            journal_command += std::format(" --until=@{}", static_cast<long long>(finish));
+        journal_command += " 2>/dev/null";
+        std::vector<std::string> journal_lines;
+        utils::file_system::read_system_command(journal_command.c_str(), journal_lines);
+        for(const auto& line : journal_lines)
+        {
+            const auto identifier = login_failure::json_field(line, "SYSLOG_IDENTIFIER");
+            const auto comm = login_failure::json_field(line, "_COMM");
+            if(identifier != "sudo" && identifier != "sudo_logsrvd" && comm != "sudo")
+                continue;
+            const auto message = login_failure::json_field(line, "MESSAGE");
+            const auto raw_timestamp = login_failure::json_field(line, "__REALTIME_TIMESTAMP");
+            long long microseconds{};
+            const auto [end, error] = std::from_chars(raw_timestamp.data(), raw_timestamp.data() + raw_timestamp.size(), microseconds);
+            if(error != std::errc{} || end != raw_timestamp.data() + raw_timestamp.size())
+                continue;
+            sudo_activity event;
+            const auto timestamp = static_cast<std::time_t>(microseconds / 1000000);
+            const auto source = "journal: " + identifier;
+            if(sudo_activity::parse(message, timestamp, source, event))
+                add_sudo_activity(events, std::move(event), start, finish, user);
+        }
+
+        std::sort(events.begin(), events.end(), sudo_activity::newest_first);
+        static const std::vector<std::string> headers = {"Time", "Invoking user", "Target user", "Command", "Source"};
+        std::vector<std::vector<std::string>> rows;
+        for(const auto& entry : events)
+            rows.push_back({utils::time::format_time(entry.timestamp), entry.username, entry.target_user, entry.command, entry.source});
         if(rows.size() > maximum) rows.resize(maximum);
         utils::table::print_table(headers, rows);
         LOG_INFO(std::format("Displayed {} sudo activity records.\n", rows.size()));

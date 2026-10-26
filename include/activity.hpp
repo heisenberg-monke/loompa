@@ -26,12 +26,27 @@ namespace loompa
         static bool newest_first(const login_failure& left, const login_failure& right);
     };
 
+    struct sudo_activity
+    {
+        std::time_t timestamp{};
+        std::string username;
+        std::string target_user;
+        std::string command;
+        std::string source;
+
+        bool matches(std::time_t since, std::time_t until, std::string_view user) const;
+        bool merge_duplicate(const sudo_activity& other);
+        static bool parse(std::string_view message, std::time_t timestamp, std::string_view source, sudo_activity& result);
+        static bool newest_first(const sudo_activity& left, const sudo_activity& right);
+    };
+
     class activity_manager
     {
         const user_manager& users;
         std::pair<std::time_t, std::time_t> parse_time_range(std::string_view since, std::string_view until) const;
         size_t parse_row_limit(std::string_view limit) const;
         void add_failure(std::vector<login_failure>& events, login_failure event, std::time_t since, std::time_t until, std::string_view user) const;
+        void add_sudo_activity(std::vector<sudo_activity>& events, sudo_activity event, std::time_t since, std::time_t until, std::string_view user) const;
         void status() const;
         void logins(std::string_view since, std::string_view until, std::string_view limit, std::string_view user) const;
         void failed_logins(std::string_view since, std::string_view until, std::string_view limit, std::string_view user) const;
