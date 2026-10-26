@@ -14,7 +14,6 @@ namespace loompa
         void update_snapshot();
         void list() const;
         void check(std::string_view username) const;
-        void sudo(std::string_view username) const;
         void changes(std::string_view since, std::string_view severity) const;
 
     public:

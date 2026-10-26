@@ -419,37 +419,6 @@ namespace loompa
         LOG_INFO(std::format("Checked configured privileges for {}.\n", username));
     }
 
-    void privileges_manager::sudo(std::string_view username) const
-    {
-        check(username);
-
-        static const std::vector<std::string> headers = {"Recorded sudo activity"};
-        std::vector<std::vector<std::string>> rows;
-        const std::vector<std::filesystem::path> log_paths = {"/var/log/auth.log", "/var/log/secure"};
-
-        for(const auto& path : log_paths)
-        {
-            std::ifstream input(path);
-            std::string line;
-
-            while(std::getline(input, line))
-            {
-                const auto pos = line.find("sudo");
-
-                if(pos != std::string::npos &&
-                    (line.find("sudo: " + std::string(username) + " ", pos) != std::string::npos ||
-                     line.find("USER=" + std::string(username), pos) != std::string::npos ||
-                     line.find("user=" + std::string(username), pos) != std::string::npos))
-                    rows.push_back({line});
-            }
-        }
-
-        if(rows.empty())
-            rows.push_back({"No matching activity found in readable auth.log or secure files"});
-
-        utils::table::print_table(headers, rows);
-    }
-
     void privileges_manager::changes(std::string_view since, std::string_view severity) const
     {
         size_t severity_level = 0;
@@ -514,22 +483,19 @@ namespace loompa
             throw loompa_exception("No privileges subcommand provided.\n");
 
         const std::string_view command = utils::string_view::shift_args(argc, argv);
-        if(command != "list" && command != "check" && command != "sudo" && command != "changes")
+        if(command != "list" && command != "check" && command != "changes")
             throw loompa_exception(std::format("Unknown privileges subcommand: {}\n", command));
 
         update_snapshot();
 
         if(command == "list")
             list();
-        else if(command == "check" || command == "sudo")
+        else if(command == "check")
         {
             if(argc == 0)
                 throw loompa_exception(std::format("No username provided for privileges {}.\n", command));
             const std::string_view username = utils::string_view::shift_args(argc, argv);
-            if(command == "check")
-                check(username);
-            else
-                sudo(username);
+            check(username);
         }
         else if(command == "changes")
         {
