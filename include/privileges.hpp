@@ -11,6 +11,7 @@ namespace loompa
         std::vector<std::string> change_history;
 
         std::vector<std::string> collect_privileges() const;
+        bool capability_path_is_scanned(std::string_view path) const;
         void update_snapshot();
         void list() const;
         void check(std::string_view username) const;

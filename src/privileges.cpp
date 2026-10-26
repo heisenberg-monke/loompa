@@ -99,11 +99,10 @@ namespace loompa
         }
 
         std::vector<std::string> capability_lines;
-
-        LOG_INFO("Scanning standard executable and helper directories for file capabilities.\n");
+        LOG_INFO("Scanning executable and security-helper directories for file capabilities.\n");
         utils::file_system::read_system_command(
-            "getcap -r /bin /sbin /usr/bin /usr/sbin /usr/lib /usr/lib64 /usr/libexec "
-            "/usr/local/bin /usr/local/sbin /usr/local/libexec /opt 2>/dev/null",
+            "getcap -r /bin /sbin /usr/bin /usr/sbin /usr/libexec /usr/local/bin /usr/local/sbin /usr/local/libexec "
+            "/usr/lib/openssh /usr/lib/sudo /usr/lib/polkit-1 /usr/lib/snapd /usr/lib/gstreamer-1.0 2>/dev/null",
             capability_lines);
 
         for(const auto& line : capability_lines)
@@ -121,6 +120,19 @@ namespace loompa
         return records;
     }
 
+    bool privileges_manager::capability_path_is_scanned(std::string_view path) const
+    {
+        static constexpr std::array<std::string_view, 13> scan_roots = {
+            "/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec", "/usr/local/bin",
+            "/usr/local/sbin", "/usr/local/libexec", "/usr/lib/openssh", "/usr/lib/sudo",
+            "/usr/lib/polkit-1", "/usr/lib/snapd", "/usr/lib/gstreamer-1.0"
+        };
+
+        return std::any_of(scan_roots.begin(), scan_roots.end(), [&](std::string_view root) {
+            return path == root || (path.starts_with(root) && path.size() > root.size() && path[root.size()] == '/');
+        });
+    }
+
     void privileges_manager::update_snapshot()
     {
         std::error_code error;
@@ -129,7 +141,25 @@ namespace loompa
         if(error)
             throw loompa_exception(std::format("Failed to create privilege data directory {}: {}\n", data_dir.string(), error.message()));
 
-        const auto current_records = collect_privileges();
+        auto current_records = collect_privileges();
+
+        if(std::filesystem::exists(snapshot_path))
+        {
+            std::istringstream previous_capabilities(utils::file_system::read_entire_file(snapshot_path));
+            std::string previous_record;
+            while(std::getline(previous_capabilities, previous_record))
+            {
+                if(!previous_record.starts_with("CAPABILITY|"))
+                    continue;
+                const std::string_view capability = std::string_view(previous_record).substr(11);
+                const auto separator = capability.find(' ');
+                const auto path = capability.substr(0, separator);
+                if(!capability_path_is_scanned(path))
+                    current_records.push_back(std::move(previous_record));
+            }
+            std::sort(current_records.begin(), current_records.end());
+            current_records.erase(std::unique(current_records.begin(), current_records.end()), current_records.end());
+        }
 
         privilege_records.clear();
         for(const auto& record : current_records)
